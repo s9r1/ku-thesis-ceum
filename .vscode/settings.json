@@ -1,0 +1,45 @@
+{
+  "latex-workshop.formatting.latex": "tex-fmt",
+
+  "latex-workshop.latex.autoBuild.cleanAndRetry.enabled": false,
+  // "latex-workshop.latex.autoClean.run": "onFailed",
+  "latex-workshop.latex.clean.args": [
+    "-r",
+    "%WORKSPACE_FOLDER%/.latexmkrc",
+    "-outdir=%WORKSPACE_FOLDER%/.aux",
+    "-c",
+    "%TEX%"
+  ],
+  "latex-workshop.latex.outDir": "%WORKSPACE_FOLDER%/out",
+
+  "latex-workshop.latex.rootFile.doNotPrompt": true,
+  // "latex-workshop.latex.rootFile.useSubFile": false,
+
+  "latex-workshop.latex.recipe.default": "latexmk",
+  "latex-workshop.latex.recipes": [
+    {
+      "name": "latexmk",
+      "tools": ["latexmk"]
+    }
+  ],
+  "latex-workshop.latex.tools": [
+    {
+      "name": "latexmk",
+      "command": "latexmk",
+      "args": [
+        "-r",
+        "%WORKSPACE_FOLDER%/.latexmkrc",
+        "-e",
+        "$ENV{'TEXINPUTS'}='%WORKSPACE_FOLDER%/style//:' . $ENV{'TEXINPUTS'};",
+        "-e",
+        "$ENV{'BSTINPUTS'}='%WORKSPACE_FOLDER%/style//:' . $ENV{'BSTINPUTS'};",
+        "-auxdir=%WORKSPACE_FOLDER%/.aux",
+        "-outdir=%OUTDIR%",
+        "%DOC%"
+      ]
+    }
+  ],
+
+  // "latex-workshop.synctex.afterBuild.enabled": true,
+  "latex-workshop.view.pdf.internal.synctex.keybinding": "double-click"
+}
