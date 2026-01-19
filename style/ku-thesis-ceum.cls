@@ -1,13 +1,57 @@
+\RequirePackage{l3keys2e}
+
 \NeedsTeXFormat{LaTeX2e}
 \ProvidesExplClass{ku-thesis-ceum}{2026-01-09}{0.1.0}
 {Thesis class for CE and UM}
 
-\sys_if_engine_uptex:T{
-  \RequirePackage{plautopatch}
+\sys_if_engine_luatex:F{
+  \sys_if_engine_uptex:TF{
+    \RequirePackage{plautopatch}
+  }{
+    \msg_new:nnn { myclass } { bad-engine }
+    { LuaLaTeX~or~upLaTeX~required. }
+    \msg_fatal:nn { myclass } { bad-engine }
+  }
 }
 
-\DeclareOption*{\PassOptionsToClass{\CurrentOption}{jlreq}}
-\ProcessOptions\relax
+\str_new:N \g_kuth_degree_str
+\cs_new_protected:Npn \__kuth_set_degree:n #1{
+  \str_gset:Nn \g_kuth_degree_str {#1}
+}
+
+\clist_new:N \g__kuth_pass_clist
+
+\keys_define:nn { ku-thesis-ceum / option }{
+  doctor   .code:n = \__kuth_set_degree:n { doctor },
+  master   .code:n = \__kuth_set_degree:n { master },
+  bachelor .code:n = \__kuth_set_degree:n { bachelor },
+
+  unknown .code:n = {
+    \clist_gput_right:No \g__kuth_pass_clist { \CurrentOption }
+  }
+}
+
+\ProcessKeysOptions { ku-thesis-ceum / option }
+\PassOptionsToClass { \g__kuth_pass_clist } { jlreq }
+
+\str_if_empty:NT \g_kuth_degree_str{
+  \str_gset:Nn \g_kuth_degree_str { master }
+}
+
+\str_case:Vn \g_kuth_degree_str{
+  {doctor}{
+    \cs_gset:cpn { @thesistype }  { 博士論文 }
+    \cs_gset:cpn { @ethesistype } { Doctoral~Thesis }
+  }
+  {master}{
+    \cs_gset:cpn { @thesistype }  { 修士論文 }
+    \cs_gset:cpn { @ethesistype } { Master's~Thesis }
+  }
+  {bachelor}{
+    \cs_gset:cpn { @thesistype }  { 学士論文 }
+    \cs_gset:cpn { @ethesistype } { Bachelor's~Thesis }
+  }
+}
 
 \LoadClass[
   book,
@@ -23,7 +67,7 @@
 \RequirePackage{graphicx}
 
 % ------------------------------------------------------------
-% Font
+% Fonts
 % ------------------------------------------------------------
 \sys_if_engine_uptex:T{
   \RequirePackage[T1]{fontenc}
@@ -31,19 +75,19 @@
 
   \RequirePackage[haranoaji]{pxchfon}
   \setboldgothicfont{HaranoAjiGothic-Medium.otf}
+
+  % todo: luatexではこの処理は不要なはずだが、一応確認
+  % \bfseriesしたときに和文フォントではbではなくbxを使う
+  \DeclareFontShape{JY2}{hmc}{b}{n}{<->ssub*hmc/bx/n}{}
+  \DeclareFontShape{JT2}{hmc}{b}{n}{<->ssub*hmc/bx/n}{}
+  \DeclareFontShape{JY2}{hgt}{b}{n}{<->ssub*hgt/bx/n}{}
+  \DeclareFontShape{JT2}{hgt}{b}{n}{<->ssub*hgt/bx/n}{}
 }
 \sys_if_engine_luatex:T{
   \RequirePackage{fontspec}
 }
 
 \RequirePackage[scale=1.05,semibold]{sourcesanspro}
-
-% todo: luatexでも同様の処理が必要かどうか
-% \bfseriesしたときに和文フォントでbではなくbxを使う
-\DeclareFontShape{JY2}{hmc}{b}{n}{<->ssub*hmc/bx/n}{}
-\DeclareFontShape{JT2}{hmc}{b}{n}{<->ssub*hmc/bx/n}{}
-\DeclareFontShape{JY2}{hgt}{b}{n}{<->ssub*hgt/bx/n}{}
-\DeclareFontShape{JT2}{hgt}{b}{n}{<->ssub*hgt/bx/n}{}
 
 % 暫定
 % https://github.com/anlp-nenji/nlproceedings/blob/main/nlproceedings.cls
@@ -97,6 +141,21 @@
   \addcontentsline{toc}{chapter}{\protect\numberline{}#1}
 }
 
+% ------------------------------------------------------------
+% Bibliography
+% ------------------------------------------------------------
+\RequirePackage{jlreq-complements}
+
+\jlreqsetup{
+  thebibliography_heading={
+    \chapter*{\refname}
+    \addcontentsline{toc}{chapter}{\protect\numberline{}\refname}
+  }
+}
+
+% ------------------------------------------------------------
+% Appendix
+% ------------------------------------------------------------
 % Appendixのページ番号をA-1形式にする
 \jlreqsetup{
   appendix_postcode={
@@ -128,23 +187,11 @@
 \setlength{\cftchapnumwidth}{4zw}
 
 % ------------------------------------------------------------
-% Bibliography
-% ------------------------------------------------------------
-\RequirePackage{jlreq-complements}
-
-\jlreqsetup{
-  thebibliography_heading={
-    \chapter*{\refname}
-    \addcontentsline{toc}{chapter}{\protect\numberline{}\refname}
-  }
-}
-
-% ------------------------------------------------------------
 % Front Cover
 % ------------------------------------------------------------
 \newcommand\edate[1]{\newcommand\@edate{#1}}
-\newcommand\header[1]{\newcommand\@header{#1}}
-\newcommand\eheader[1]{\newcommand\@eheader{#1}}
+\newcommand\department[1]{\newcommand\@department{#1}}
+\newcommand\edepartment[1]{\newcommand\@edepartment{#1}}
 \newcommand\affiliation[1]{\newcommand\@affiliation{#1}}
 
 \renewcommand{\maketitle}{
@@ -155,13 +202,14 @@
         \headfont
         \renewcommand{\jlreqkanjiskip}{0.04zw}
         \normalsize% kanjiskip適用のため必要
-        京都大学大学院工学研究科
-        \ifdefvoid{\@header}{}{\\\@header}
-        \\\@date\par
+        京都大学大学院工学研究科\\
+        \ifdefvoid{\@department}{}{\@department\@thesistype\\}
+        \@date\par
       }
       \linespread{0.85}\selectfont
       \vspace{1em}
-      \ifdefvoid{\@eheader}{}{\@eheader\\}
+      \@ethesistype\\
+      \ifdefvoid{\@edepartment}{}{\@edepartment\\}
       Graduate~School~of~Engineering\\
       Kyoto~University
       \ifdefvoid{\@edate}{}{\\\@edate}
@@ -189,8 +237,9 @@
       \vspace{3.5cm}
       \begin{center}
         \fontsize{16pt}{36pt}\selectfont
-        京都大学大学院\hspace{1zw}工学研究科\hspace{1zw}
-        \ifdefvoid{\@affiliation}{\@empty}{\@affiliation}
+        京都大学大学院\hspace{1zw}工学研究科
+        \ifdefvoid{\@department}{}{\hspace{1zw}\@department}
+        \ifdefvoid{\@affiliation}{}{\\\@affiliation}
         \par\@author
       \end{center}
     }
