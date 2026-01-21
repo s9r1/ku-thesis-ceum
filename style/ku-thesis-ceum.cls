@@ -53,6 +53,9 @@
   }
 }
 
+% jlreq初期化の際にcmrでサイズ代替が起こらないようにする
+\RequirePackage{fix-cm}
+
 \LoadClass[
   book,
   openany,
@@ -65,6 +68,12 @@
 ]{jlreq}
 
 \RequirePackage{graphicx}
+
+% Creatorにタイプセット日時が入るのを避ける
+\RequirePackage[hidelinks,pdfcreator={TeX output}]{hyperref}
+\sys_if_engine_uptex:T{
+  \RequirePackage{pxjahyper}
+}
 
 % ------------------------------------------------------------
 % Fonts
