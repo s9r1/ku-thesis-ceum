@@ -35,7 +35,7 @@
         "$ENV{'BSTINPUTS'}='%WORKSPACE_FOLDER%/style//:' . $ENV{'BSTINPUTS'};",
         "-auxdir=%WORKSPACE_FOLDER%/.aux",
         "-outdir=%OUTDIR%",
-        "%DOC%"
+        "%DOC_EXT%"
       ]
     }
   ],

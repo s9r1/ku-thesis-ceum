@@ -78,23 +78,24 @@
 % ------------------------------------------------------------
 % Fonts
 % ------------------------------------------------------------
-\sys_if_engine_uptex:T{
-  \RequirePackage[T1]{fontenc}
-  \RequirePackage{jlreq-deluxe}
+% \sys_if_engine_uptex:T{
+%   \RequirePackage[T1]{fontenc}
+%   \RequirePackage{jlreq-deluxe}
 
-  \RequirePackage[haranoaji]{pxchfon}
-  \setboldgothicfont{HaranoAjiGothic-Medium.otf}
+%   \RequirePackage[haranoaji]{pxchfon}
+%   \setboldgothicfont{HaranoAjiGothic-Medium.otf}
 
-  % todo: luatexではこの処理は不要なはずだが、一応確認
-  % \bfseriesしたときに和文フォントではbではなくbxを使う
-  \DeclareFontShape{JY2}{hmc}{b}{n}{<->ssub*hmc/bx/n}{}
-  \DeclareFontShape{JT2}{hmc}{b}{n}{<->ssub*hmc/bx/n}{}
-  \DeclareFontShape{JY2}{hgt}{b}{n}{<->ssub*hgt/bx/n}{}
-  \DeclareFontShape{JT2}{hgt}{b}{n}{<->ssub*hgt/bx/n}{}
-}
-\sys_if_engine_luatex:T{
-  \RequirePackage{fontspec}
-}
+%   % \bfseriesしたときに和文フォントではbではなくbxを使う
+%   \DeclareFontShape{JY2}{hmc}{b}{n}{<->ssub*hmc/bx/n}{}
+%   \DeclareFontShape{JT2}{hmc}{b}{n}{<->ssub*hmc/bx/n}{}
+%   \DeclareFontShape{JY2}{hgt}{b}{n}{<->ssub*hgt/bx/n}{}
+%   \DeclareFontShape{JT2}{hgt}{b}{n}{<->ssub*hgt/bx/n}{}
+% }
+% \sys_if_engine_luatex:T{
+%   \RequirePackage[haranoaji,deluxe]{luatexja-preset}
+%   \ltjnewpreset{ku-thesis-ceum}{haranoaji,gt-b=HaranoAjiGothic-Medium.otf}
+%   \ltjapplypreset{ku-thesis-ceum}
+% }
 
 \RequirePackage[scale=1.05,semibold]{sourcesanspro}
 
@@ -193,7 +194,7 @@
 % chapter関連
 \renewcommand{\cftchapfont}{\headfont}
 \renewcommand{\cftchappagefont}{\headfont}
-\setlength{\cftchapnumwidth}{4zw}
+\setlength{\cftchapnumwidth}{4\zw}
 
 % ------------------------------------------------------------
 % Front Cover
@@ -209,7 +210,7 @@
     \begin{minipage}[t]{0.7\textwidth}
       {
         \headfont
-        \renewcommand{\jlreqkanjiskip}{0.04zw}
+        \renewcommand{\jlreqkanjiskip}{0.04\zw}
         \normalsize% kanjiskip適用のため必要
         京都大学大学院工学研究科\\
         \ifdefvoid{\@department}{}{\@department\@thesistype\\}
@@ -236,8 +237,8 @@
     \vspace{2.5cm}
 
     {
-      \renewcommand{\jlreqkanjiskip}{0.12zw}
-      \renewcommand{\jlreqxkanjiskip}{0.08zw}
+      \renewcommand{\jlreqkanjiskip}{0.12\zw}
+      \renewcommand{\jlreqxkanjiskip}{0.08\zw}
       \begin{center}
         \fontsize{18pt}{36pt}\selectfont
         \@title
@@ -246,8 +247,8 @@
       \vspace{3.5cm}
       \begin{center}
         \fontsize{16pt}{36pt}\selectfont
-        京都大学大学院\hspace{1zw}工学研究科
-        \ifdefvoid{\@department}{}{\hspace{1zw}\@department}
+        京都大学大学院\hspace{1\zw}工学研究科
+        \ifdefvoid{\@department}{}{\hspace{1\zw}\@department}
         \ifdefvoid{\@affiliation}{}{\\\@affiliation}
         \par\@author
       \end{center}
