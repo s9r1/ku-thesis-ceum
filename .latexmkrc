@@ -99,7 +99,8 @@ sub mylatex {
     if (!$fmt_enabled{$job}) {
         # iniモードでの実行でfmtを生成する。同時に-recorderで現段階のflsを生成する
         print "mylatex: making fmt in ini mode...\n";
-        my $ini_rc = Run_subst("$engine -ini $opts -recorder -jobname=\"$job\" -output-directory=\"$auxdir\" \\\&$engine mylatexformat.ltx $src");
+        my $amp_format = qq("&$engine"); # WindowsでもUNIXでも実行できるように
+        my $ini_rc     = Run_subst("$engine -ini $opts -recorder -jobname=\"$job\" -output-directory=\"$auxdir\" $amp_format mylatexformat.ltx $src");
 
         if (($ini_rc == 0) && (-e $fmt_path)) {
             # ini実行時のflsを使ってローカルのsty等のパスをdepsに記録

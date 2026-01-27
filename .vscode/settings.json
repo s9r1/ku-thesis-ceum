@@ -27,9 +27,9 @@
       "command": "latexmk",
       "args": [
         "-e",
-        "$ENV{'TEXINPUTS'}='%WORKSPACE_FOLDER%/style//:' . $ENV{'TEXINPUTS'};",
+        "ensure_path('TEXINPUTS', '%WORKSPACE_FOLDER%/style//');",
         "-e",
-        "$ENV{'BSTINPUTS'}='%WORKSPACE_FOLDER%/style//:' . $ENV{'BSTINPUTS'};",
+        "ensure_path('BSTINPUTS', '%WORKSPACE_FOLDER%/style//');",
         "-auxdir=%WORKSPACE_FOLDER%/.aux",
         "-outdir=%OUTDIR%",
         "%DOC_EXT%"
