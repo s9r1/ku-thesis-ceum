@@ -1,8 +1,7 @@
 {
-  "latex-workshop.formatting.latex": "tex-fmt",
-
   "latex-workshop.latex.autoBuild.cleanAndRetry.enabled": false,
   // "latex-workshop.latex.autoClean.run": "onFailed",
+  "latex-workshop.latex.build.fromWorkspaceFolder": true,
   "latex-workshop.latex.clean.args": [
     "-r",
     "%WORKSPACE_FOLDER%/.latexmkrc",
@@ -27,8 +26,6 @@
       "name": "latexmk",
       "command": "latexmk",
       "args": [
-        "-r",
-        "%WORKSPACE_FOLDER%/.latexmkrc",
         "-e",
         "$ENV{'TEXINPUTS'}='%WORKSPACE_FOLDER%/style//:' . $ENV{'TEXINPUTS'};",
         "-e",
@@ -38,8 +35,5 @@
         "%DOC_EXT%"
       ]
     }
-  ],
-
-  // "latex-workshop.synctex.afterBuild.enabled": true,
-  "latex-workshop.view.pdf.internal.synctex.keybinding": "double-click"
+  ]
 }
