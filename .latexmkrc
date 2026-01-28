@@ -60,7 +60,6 @@ sub mylatex {
     my ($engine, $auxdir, $job, $base, @args) = @_;
 
     my $src  = pop @args; # $quote_filenames=1でも""はつかない
-    my $opts = join(' ', @args);
 
     my $src_path = $src;
     $src_path =~ s/^"(.*)"\z/$1/; # 念のため
@@ -78,17 +77,17 @@ sub mylatex {
     my $deps_path = catfile($auxdir, "$job.deps");
     my $lock_path = catfile($auxdir, "$job.fmtlock");
 
-    my $cmd_fmt   = "$engine -fmt \"$fmt_path\" $opts $src";
-    my $cmd_plain = "$engine $opts $src";
+    my @cmd_fmt   = ($engine, '-fmt', $fmt_path, @args, $src);
+    my @cmd_plain = ($engine, @args, $src);
 
     # 同一ビルド中の2回目以降のタイプセット
     if (defined $fmt_enabled{$job}) {
         if ($fmt_enabled{$job}) {
             print "mylatex: (cached) using fmt ...\n";
-            return Run_subst($cmd_fmt);
+            return _system_rc(@cmd_fmt);
         } else {
             print "mylatex: (cached) normal latex ...\n";
-            return Run_subst($cmd_plain);
+            return _system_rc(@cmd_plain);
         }
     }
 
@@ -105,11 +104,9 @@ sub mylatex {
     if (!$fmt_enabled{$job}) {
         # iniモードでの実行でfmtを生成する。同時に-recorderで現段階のflsを生成する
         print "mylatex: making fmt in ini mode...\n";
-        my $amp_format = qq("&$engine"); # WindowsでもUNIX系でも実行できるように
-        my $ini_src    = qq("$target");
-        my $ini_rc     = Run_subst("$engine -ini $opts -recorder -jobname=\"$job\" -output-directory=\"$auxdir\" $amp_format mylatexformat.ltx $ini_src");
+        my $rc = _system_rc($engine, '-ini', @args, '-recorder', "-jobname=$job", "-output-directory=$auxdir", "&$engine", 'mylatexformat.ltx', $target);
 
-        if (($ini_rc == 0) && (-e $fmt_path)) {
+        if (($rc == 0) && (-e $fmt_path)) {
             # ini実行時のflsを使ってローカルのsty等のパスをdepsに記録
             my $fls_path = catfile($auxdir, "$job.fls");
             _update_deps_from_fls($fls_path, $deps_path) if $TRACK_STY;
@@ -127,10 +124,10 @@ sub mylatex {
 
     if ($fmt_enabled{$job}) {
         print "mylatex: fmt detected & signature unchanged, so running with fmt...\n";
-        return Run_subst($cmd_fmt);
+        return _system_rc(@cmd_fmt);
     } else {
         print "mylatex: running normal latex (no fmt)...\n";
-        return Run_subst($cmd_plain);
+        return _system_rc(@cmd_plain);
     }
 }
 
@@ -392,6 +389,20 @@ sub _write_1line {
     open(my $fh, '>', $path) or die "Cannot write $path: $!";
     print $fh "$value\n";
     close($fh);
+}
+
+# Run_substの代わり。配列で実行することで""周辺の処理を避ける
+sub _system_rc {
+    my (@cmd) = @_;
+
+    warn "------------\n";
+    warn "Running: '" . join(' ', @cmd) . "'\n";
+    warn "------------\n";
+
+    my $st = system(@cmd);
+    return 1 if $st == -1; # 起動失敗
+    return 1 if $st & 127; # 異常終了
+    return $st >> 8; # exit code
 }
 
 # コメント、改行コード、前後の空白を削除
