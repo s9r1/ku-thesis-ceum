@@ -3,15 +3,13 @@ use strict;
 use warnings;
 
 use Digest::SHA           qw(sha1_hex);
-use File::Basename        qw(dirname);
+use File::Basename        qw(dirname basename);
 use File::Spec::Functions qw(file_name_is_absolute catfile);
 use Fcntl                 qw(:flock);
 use Cwd                   qw(getcwd abs_path);
 
-$jobname = 'your_name';
-
 my $tex_opts = '-synctex=1 -file-line-error -halt-on-error -interaction=nonstopmode';
-$latex    = "internal mylatex uplatex %Y %R $tex_opts %O %S";
+$latex    = "internal mylatex uplatex %Y %R %A $tex_opts %O %S";
 $lualatex = "lualatex $tex_opts %O %S";
 $dvipdf   = 'dvipdfmx %O -o %D %S';
 $pdf_mode = 3;
@@ -44,7 +42,7 @@ $clean_ext = "$clean_ext fmt sha1 fmtlock deps";
 # }
 
 # ローカルのsty,clsが更新された場合にfmtを再生成するかどうか
-our $TRACK_STY = 0; # 不要な場合は0にする
+our $TRACK_STY = 1; # 不要な場合は0にする
 
 # do_cdされる前に実行ディレクトリ（プロジェクトルート）を取得する。ローカルsty,clsの収集に使う
 # 必要なら $out_dir = "$PRJ_ROOT/out"; $aux_dir = "$PRJ_ROOT/.aux"; もあり
@@ -59,13 +57,21 @@ my $MAX_FILES = 1000; # プリアンブル精査対象ファイル数の上限�
 my %fmt_enabled; # job -> (undef|0|1)
 
 sub mylatex {
-    my ($engine, $auxdir, $job, @args) = @_;
+    my ($engine, $auxdir, $job, $base, @args) = @_;
 
-    my $src  = pop @args; # "hoge.tex" <- $quote_filenames = 1;
+    my $src  = pop @args; # $quote_filenames=1でも""はつかない
     my $opts = join(' ', @args);
 
     my $src_path = $src;
-    $src_path =~ s/^"(.*)"\z/$1/; # 念のためファイル操作に使うものは""を外す
+    $src_path =~ s/^"(.*)"\z/$1/; # 念のため
+
+    my $target = _resolve_subfiles($src_path);
+
+    # jobnameが指定されていなければsubfilesの子ファイルで親のfmtを使う
+    if ($job eq $base && $target ne $src_path && -e $target) {
+        $job = basename($target);
+        $job =~ s/\.tex\z//i;
+    }
 
     my $fmt_path  = catfile($auxdir, "$job.fmt");
     my $sha_path  = catfile($auxdir, "$job.sha1");
@@ -74,9 +80,6 @@ sub mylatex {
 
     my $cmd_fmt   = "$engine -fmt \"$fmt_path\" $opts $src";
     my $cmd_plain = "$engine $opts $src";
-
-    open(my $lk, '>>', $lock_path) or die "Cannot open lock file $lock_path: $!";
-    flock($lk, LOCK_EX);
 
     # 同一ビルド中の2回目以降のタイプセット
     if (defined $fmt_enabled{$job}) {
@@ -89,7 +92,10 @@ sub mylatex {
         }
     }
 
-    my $sig_current = _calc_sig($src_path, $deps_path); # 現在のdepsで計算。後で更新が必要
+    open(my $lk, '>>', $lock_path) or die "Cannot open lock file $lock_path: $!";
+    flock($lk, LOCK_EX);
+
+    my $sig_current = _calc_sig($target, $deps_path); # 現在のdepsで計算。後で更新が必要
     my $sig_saved   = _read_1line($sha_path);
 
     # プリアンブル部の編集、あるいはdeps内ファイルの編集を検知
@@ -99,8 +105,9 @@ sub mylatex {
     if (!$fmt_enabled{$job}) {
         # iniモードでの実行でfmtを生成する。同時に-recorderで現段階のflsを生成する
         print "mylatex: making fmt in ini mode...\n";
-        my $amp_format = qq("&$engine"); # WindowsでもUNIXでも実行できるように
-        my $ini_rc     = Run_subst("$engine -ini $opts -recorder -jobname=\"$job\" -output-directory=\"$auxdir\" $amp_format mylatexformat.ltx $src");
+        my $amp_format = qq("&$engine"); # WindowsでもUNIX系でも実行できるように
+        my $ini_src    = qq("$target");
+        my $ini_rc     = Run_subst("$engine -ini $opts -recorder -jobname=\"$job\" -output-directory=\"$auxdir\" $amp_format mylatexformat.ltx $ini_src");
 
         if (($ini_rc == 0) && (-e $fmt_path)) {
             # ini実行時のflsを使ってローカルのsty等のパスをdepsに記録
@@ -108,13 +115,15 @@ sub mylatex {
             _update_deps_from_fls($fls_path, $deps_path) if $TRACK_STY;
 
             # ソースのプリアンブルとdepsを使ってsha1を更新
-            $sig_current = _calc_sig($src_path, $deps_path);
+            $sig_current = _calc_sig($target, $deps_path);
             _write_1line($sha_path, $sig_current);
             $fmt_enabled{$job} = 1;
         } else {
             warn "mylatex: fmt not found after ini; fallback to normal compile\n";
         }
     }
+
+    close($lk);
 
     if ($fmt_enabled{$job}) {
         print "mylatex: fmt detected & signature unchanged, so running with fmt...\n";
@@ -123,42 +132,6 @@ sub mylatex {
         print "mylatex: running normal latex (no fmt)...\n";
         return Run_subst($cmd_plain);
     }
-}
-
-sub _calc_sig {
-    my ($src_path, $deps_path) = @_;
-    my $pre_sig  = _calc_preamble_sig($src_path);
-    my $deps_sig = $TRACK_STY ? _calc_deps_sig($deps_path) : "DEPS_IGNORED\n";
-    return sha1_hex("PREAMBLE:$pre_sig\nDEPS:$deps_sig\n");
-}
-
-# subfilesや\inputを考慮しながらfmt対象のブリアンブル部をSHA-1化
-sub _calc_preamble_sig {
-    my ($src_path) = @_;
-
-    my $target = _resolve_subfiles($src_path);
-
-    my %seen; # 同一ファイルの複数回参照は無視
-    my @queue = ($target);
-    my $acc   = '';
-    my $count = 0;
-
-    # .texソースとそこで\inputされたファイルに対してループ
-    while (@queue) {
-        last if ++$count > $MAX_FILES;
-
-        my $tex_path = shift @queue;
-        next if $seen{$tex_path}++;
-
-        my ($preamble, $inputs_ref) = _extract_preamble_and_inputs($tex_path);
-
-        $acc .= "<<FILE:$tex_path>>\n";
-        $acc .= $preamble;
-
-        push @queue, @$inputs_ref if $inputs_ref && @$inputs_ref;
-    }
-
-    return sha1_hex($acc);
 }
 
 # ファイルの有効な1行目が\documentclass[hoge]{subfiles}であればhoge.texを、それ以外は引数の値をそのまま返す
@@ -171,7 +144,7 @@ sub _resolve_subfiles {
     my $first;
 
     while ($first = <$fh>) {
-        $first = _normalize_tex_line($first);
+        _normalize_tex_line($first);
         next if $first eq '';
         last;
     }
@@ -192,6 +165,47 @@ sub _resolve_subfiles {
     return $target;
 }
 
+sub _calc_sig {
+    my ($target, $deps_path) = @_;
+    my $pre_sig  = _calc_preamble_sig($target);
+    my $deps_sig = $TRACK_STY ? _calc_deps_sig($deps_path) : "DEPS_IGNORED\n";
+    return sha1_hex("PREAMBLE:$pre_sig\nDEPS:$deps_sig\n");
+}
+
+# subfilesや\inputを考慮しながらfmt対象のブリアンブル部をSHA-1化
+# @param $target cdから見たfmt対象ファイルの相対パス
+sub _calc_preamble_sig {
+    my ($target) = @_;
+
+    my %seen; # 同一ファイルの複数回参照は簡略化
+    my @queue = ($target);
+    my $acc   = '';
+    my $count = 0;
+
+    # .texソースとそこで\inputされたファイルに対してループ
+    while (@queue) {
+        last if ++$count > $MAX_FILES;
+
+        my $tex_path = shift @queue;
+        my $key      = abs_path($tex_path) // $tex_path;
+        $key = _normalize_path_for_compare($key);
+
+        if ($seen{$key}++) {
+            $acc .= "<<DUP:$key>>\n";
+            next;
+        }
+
+        my ($preamble, $inputs_ref) = _extract_preamble_and_inputs($tex_path);
+
+        $acc .= "<<FILE:$key>>\n";
+        $acc .= $preamble;
+
+        push @queue, @$inputs_ref if $inputs_ref && @$inputs_ref;
+    }
+
+    return sha1_hex($acc);
+}
+
 # 空行やコメントは無視してキャッシュ化対象のプリアンブルを抽出する
 # @param $tex_path ソースあるいはそこでinputされた.texのパス
 # @return (プリアンブル部, その中の\inputのパス配列の参照)
@@ -204,7 +218,7 @@ sub _extract_preamble_and_inputs {
     my $dir = dirname($tex_path);
 
     while (my $line = <$fh>) {
-        $line = _normalize_tex_line($line);
+        _normalize_tex_line($line);
         next if $line eq '';
 
         last
@@ -228,7 +242,7 @@ sub _extract_preamble_and_inputs {
 # ソースやそこにinputされた.texファイルに記載されたinputのパスを解決する
 # @param $dir \inputが書かれた.texのdirパス
 # @param $name \input{hoge}のhoge
-# @return hogeをパス化したもの。ただし読み込めるかは別
+# @return hogeをパス化したもの
 sub _resolve_input_path {
     my ($dir, $name) = @_;
     $name =~ s/^\s+|\s+\z//g; # 前後の空白を削除
@@ -250,7 +264,7 @@ sub _calc_deps_sig {
     my @paths;
 
     while (my $line = <$fh>) {
-        $line = _strip_eol($line);
+        _strip_eol($line);
         next if $line eq '';
         push @paths, $line;
     }
@@ -303,7 +317,7 @@ sub _extract_local_sty_from_fls {
     open(my $fh, '<', $fls) or return [];
 
     while (my $line = <$fh>) {
-        $line = _strip_eol($line);
+        _strip_eol($line);
 
         if ($line =~ /^PWD\s+(.+)\s*\z/) {
             $pwd = $1;
@@ -382,19 +396,19 @@ sub _write_1line {
 
 # コメント、改行コード、前後の空白を削除
 # コメント判定は非エスケープの%以降。verbatim|%|とかを削除してしまうのは御愛嬌
-sub _normalize_tex_line {
-    my ($line) = @_;
-    return undef unless defined $line;
-    $line = _strip_eol($line);
-    $line =~ s/(?<!\\)(?:\\\\)*\K%.*\z//; # コメントを削除
-    $line =~ s/^\s+|\s+\z//g; # 前後の空白を削除
-    return $line;
+sub _normalize_tex_line(\$) {
+    defined $_[0] or return undef;
+
+    _strip_eol($_[0]);
+    $_[0] =~ s/(?<!\\)(?:\\\\)*\K%.*\z//; # コメントを削除
+    $_[0] =~ s/^\s+|\s+\z//g; # 前後の空白を削除
+
+    return $_[0];
 }
 
 # chompの代わり
-sub _strip_eol {
-    my ($s) = @_;
-    return undef unless defined $s;
-    $s =~ s/[\r\n]+\z//;
-    return $s;
+sub _strip_eol(\$) {
+    defined $_[0] or return undef;
+    $_[0] =~ s/[\r\n]+\z//;
+    return $_[0];
 }
