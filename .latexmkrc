@@ -22,7 +22,7 @@ $makeindex = 'upmendex %O -o %D %S -s jpbase';
 
 $do_cd = 1;
 
-$clean_ext = "$clean_ext fmt sha1 fmtlock deps";
+$clean_ext = "$clean_ext fmt sha1 fmtlock deps"; # mylatexで生成するファイルを追加
 
 # （開発用）
 # ソース1行目が"% $pdf_mode = 4;"などの場合にpdf_modeを切り替える
@@ -42,7 +42,7 @@ $clean_ext = "$clean_ext fmt sha1 fmtlock deps";
 # }
 
 # ローカルのsty,clsが更新された場合にfmtを再生成するかどうか
-our $TRACK_STY = 1; # 不要な場合は0にする
+our $TRACK_STY = 0; # 不要な場合は0にする
 
 # do_cdされる前に実行ディレクトリ（プロジェクトルート）を取得する。ローカルsty,clsの収集に使う
 # 必要なら $out_dir = "$PRJ_ROOT/out"; $aux_dir = "$PRJ_ROOT/.aux"; もあり
@@ -50,7 +50,6 @@ our $TRACK_STY = 1; # 不要な場合は0にする
 my $PRJ_ROOT = abs_path(getcwd());
 $TRACK_STY = 0 unless defined $PRJ_ROOT;
 
-my $IS_WIN    = ($^O =~ /MSWin32|cygwin|msys/i) ? 1 : 0;
 my $MAX_FILES = 1000; # プリアンブル精査対象ファイル数の上限。\inputがループして無限に続く場合などを除外
 
 # 当該jobでfmtを使ってタイプセットすべきかをキャッシュしておく
@@ -59,16 +58,15 @@ my %fmt_enabled; # job -> (undef|0|1)
 sub mylatex {
     my ($engine, $auxdir, $job, $base, @args) = @_;
 
-    my $src  = pop @args; # $quote_filenames=1でも""はつかない
+    my $src = pop @args; # $quote_filenames=1でも""はつかない
+    $src =~ s/^"(.*)"\z/$1/; # 念のため
 
-    my $src_path = $src;
-    $src_path =~ s/^"(.*)"\z/$1/; # 念のため
+    my ($main, $sub_has_preamble) = _resolve_subfiles($src);
+    my $sub_path = $sub_has_preamble ? $src : undef;
 
-    my $target = _resolve_subfiles($src_path);
-
-    # jobnameが指定されていなければsubfilesの子ファイルで親のfmtを使う
-    if ($job eq $base && $target ne $src_path && -e $target) {
-        $job = basename($target);
+    # jobnameが指定されておらず、subファイルが独自のプリアンブルを持たない場合はmain.fmtを使う
+    if ($job eq $base && $main ne $src && !$sub_has_preamble) {
+        $job = basename($main);
         $job =~ s/\.tex\z//i;
     }
 
@@ -94,7 +92,7 @@ sub mylatex {
     open(my $lk, '>>', $lock_path) or die "Cannot open lock file $lock_path: $!";
     flock($lk, LOCK_EX);
 
-    my $sig_current = _calc_sig($target, $deps_path); # 現在のdepsで計算。後で更新が必要
+    my $sig_current = _calc_sig($main, $deps_path, $sub_path); # 現在のdepsで計算。後で更新が必要
     my $sig_saved   = _read_1line($sha_path);
 
     # プリアンブル部の編集、あるいはdeps内ファイルの編集を検知
@@ -104,7 +102,8 @@ sub mylatex {
     if (!$fmt_enabled{$job}) {
         # iniモードでの実行でfmtを生成する。同時に-recorderで現段階のflsを生成する
         print "mylatex: making fmt in ini mode...\n";
-        my $rc = _system_rc($engine, '-ini', @args, '-recorder', "-jobname=$job", "-output-directory=$auxdir", "&$engine", 'mylatexformat.ltx', $target);
+        my $ini_src = $sub_has_preamble ? $src : $main;
+        my $rc      = _system_rc($engine, '-ini', @args, '-recorder', "-jobname=$job", "-output-directory=$auxdir", "&$engine", 'mylatexformat.ltx', $ini_src);
 
         if (($rc == 0) && (-e $fmt_path)) {
             # ini実行時のflsを使ってローカルのsty等のパスをdepsに記録
@@ -112,7 +111,7 @@ sub mylatex {
             _update_deps_from_fls($fls_path, $deps_path) if $TRACK_STY;
 
             # ソースのプリアンブルとdepsを使ってsha1を更新
-            $sig_current = _calc_sig($target, $deps_path);
+            $sig_current = _calc_sig($main, $deps_path, $sub_path);
             _write_1line($sha_path, $sig_current);
             $fmt_enabled{$job} = 1;
         } else {
@@ -131,42 +130,60 @@ sub mylatex {
     }
 }
 
-# ファイルの有効な1行目が\documentclass[hoge]{subfiles}であればhoge.texを、それ以外は引数の値をそのまま返す
-# @param $target .texのパス
-# @return プリアンブルハッシュ化の対象にすべき.texのパス
+# subファイルについてはmainのパスを、それ以外は引数の値をそのまま返す
+# @param $main engineの実行対象となる.texのパス
+# @return (mainファイルの実在するパス, subが独自のプリアンブルを持つかどうか)
 sub _resolve_subfiles {
-    my ($target) = @_;
-    open(my $fh, '<', $target) or return $target;
+    my ($main) = @_;
+    my $sub_has_preamble = 0;
+    open(my $fh, '<', $main) or return ($main, $sub_has_preamble);
 
-    my $first;
+    my $is_subfile = 0;
 
-    while ($first = <$fh>) {
-        _normalize_tex_line($first);
-        next if $first eq '';
+    while (my $line = <$fh>) {
+        _normalize_tex_line($line);
+        next if $line eq '';
+
+        if ($is_subfile) {
+            unless ($line =~ /\\begin\{document\}/
+                || $line =~ /\\endofdump\b/
+                || $line =~ /\\csname\s+endofdump\s*\\endcsname/)
+            {
+                $sub_has_preamble = 1;
+            }
+        } elsif ($line =~ /^\\documentclass\s*\[([^\]\\]+)\]\s*\{\s*subfiles\s*\}/i) {
+            my $fname = $1;
+            $fname =~ s/^\s+|\s+\z//g;
+            last if $fname eq '';
+            $fname .= ".tex" unless $fname =~ /\.tex\z/i;
+            $fname = catfile(dirname($main), $fname);
+
+            if (-e $fname) {
+                $main       = $fname;
+                $is_subfile = 1;
+                next;
+            }
+        }
+
         last;
     }
+
     close($fh);
-
-    return $target unless defined $first;
-
-    if ($first =~ /^\\documentclass\s*\[([^\]\\]+)\]\s*\{\s*subfiles\s*\}/i) {
-        my $master = $1;
-        $master =~ s/^\s+|\s+\z//g;
-
-        if ($master ne '') {
-            $master .= ".tex" unless $master =~ /\.tex\z/i;
-            $target = catfile(dirname($target), $master);
-        }
-    }
-
-    return $target;
+    return ($main, $sub_has_preamble);
 }
 
 sub _calc_sig {
-    my ($target, $deps_path) = @_;
-    my $pre_sig  = _calc_preamble_sig($target);
-    my $deps_sig = $TRACK_STY ? _calc_deps_sig($deps_path) : "DEPS_IGNORED\n";
-    return sha1_hex("PREAMBLE:$pre_sig\nDEPS:$deps_sig\n");
+    my ($target, $deps_path, $sub_path) = @_;
+
+    my $pre_sig = _calc_preamble_sig($target);
+
+    if (defined $sub_path) {
+        my $sub_sig = _calc_preamble_sig($sub_path);
+        $pre_sig = "[MAIN:$pre_sig|SUB:$sub_sig]";
+    }
+
+    my $deps_sig = $TRACK_STY ? _calc_deps_sig($deps_path) : "DEPS_IGNORED";
+    return "PREAMBLE:$pre_sig|DEPS:$deps_sig";
 }
 
 # subfilesや\inputを考慮しながらfmt対象のブリアンブル部をSHA-1化
@@ -203,7 +220,7 @@ sub _calc_preamble_sig {
     return sha1_hex($acc);
 }
 
-# 空行やコメントは無視してキャッシュ化対象のプリアンブルを抽出する
+# 空行やコメントは無視してfmt対象のプリアンブルを抽出する
 # @param $tex_path ソースあるいはそこでinputされた.texのパス
 # @return (プリアンブル部, その中の\inputのパス配列の参照)
 sub _extract_preamble_and_inputs {
@@ -254,9 +271,9 @@ sub _resolve_input_path {
 # depsに載っているファイルに対してmtime/sizeで署名を作る
 sub _calc_deps_sig {
     my ($deps_path) = @_;
-    return sha1_hex("NO_DEPS\n") unless defined $deps_path && -e $deps_path;
+    return "NO_DEPS" unless defined $deps_path && -e $deps_path;
 
-    open(my $fh, '<', $deps_path) or return sha1_hex("NO_DEPS\n");
+    open(my $fh, '<', $deps_path) or return "NO_DEPS";
 
     my @paths;
 
@@ -368,7 +385,7 @@ sub _normalize_path_for_compare {
 
     # $path =~ s|/+$|| unless $path eq '/'; # 末尾の/は削除
     $path =~ s|\\|/|g; # /で統一
-    $path = lc($path) if $IS_WIN; # WIN系では小文字で統一
+    $path = lc($path) if ($^O =~ /MSWin32|cygwin|msys/i); # WIN系では小文字で統一
     return $path;
 }
 
@@ -395,9 +412,9 @@ sub _write_1line {
 sub _system_rc {
     my (@cmd) = @_;
 
-    warn "------------\n";
-    warn "Running: '" . join(' ', @cmd) . "'\n";
-    warn "------------\n";
+    print "------------\n";
+    print "Running: '" . join(' ', @cmd) . "'\n";
+    print "------------\n";
 
     my $st = system(@cmd);
     return 1 if $st == -1; # 起動失敗
