@@ -8,6 +8,14 @@ use File::Spec::Functions qw(file_name_is_absolute catfile);
 use Fcntl                 qw(:flock);
 use Cwd                   qw(getcwd abs_path);
 
+# -- 設定
+# ローカルのsty,clsが変更された場合にfmtを再生成するかどうか
+our $TRACK_STY = 0; # 必要な場合は1にする
+
+# デフォルト（$PRJ_ROOT）から変更したい場合は入力。$STY_ROOT以下のsty,clsを監視する
+our $STY_ROOT = ""; # .texから見た相対パスでの指定も可
+# --
+
 my $tex_opts = '-synctex=1 -file-line-error -halt-on-error -interaction=nonstopmode';
 $latex    = "internal mylatex uplatex %Y %R %A $tex_opts %O %S";
 $lualatex = "lualatex $tex_opts %O %S";
@@ -41,14 +49,10 @@ $clean_ext = "$clean_ext fmt sha1 fmtlock deps"; # mylatexで生成するファ�
 #     }
 # }
 
-# ローカルのsty,clsが更新された場合にfmtを再生成するかどうか
-our $TRACK_STY = 0; # 不要な場合は0にする
-
-# do_cdされる前に実行ディレクトリ（プロジェクトルート）を取得する。ローカルsty,clsの収集に使う
+# do_cdされる前に実行ディレクトリを取得する。ローカルsty,clsの収集に使う
 # 必要なら $out_dir = "$PRJ_ROOT/out"; $aux_dir = "$PRJ_ROOT/.aux"; もあり
-# "latex-workshop.latex.build.fromWorkspaceFolder": true が前提
+# "latex-workshop.latex.build.fromWorkspaceFolder": true も推奨
 my $PRJ_ROOT = abs_path(getcwd());
-$TRACK_STY = 0 unless defined $PRJ_ROOT;
 
 my $MAX_FILES = 1000; # プリアンブル精査対象ファイル数の上限。\inputがループして無限に続く場合などを除外
 
@@ -60,6 +64,8 @@ sub mylatex {
 
     my $src = pop @args; # $quote_filenames=1でも""はつかない
     $src =~ s/^"(.*)"\z/$1/; # 念のため
+    # $auxdir =~ s|[\\/]+\z||; # ini実行でoutdir指定したときの見栄えの問題。非本質
+    # $auxdir = ""; # fmt関連ファイルの生成先を固定したいとき。$ENV{HOME}/mylatex や $ENV{USERPROFILE}/mylatexのように指定
 
     my ($main, $sub_has_preamble) = _resolve_subfiles($src);
     my $sub_path = $sub_has_preamble ? $src : undef;
@@ -81,7 +87,7 @@ sub mylatex {
     # 同一ビルド中の2回目以降のタイプセット
     if (defined $fmt_enabled{$job}) {
         if ($fmt_enabled{$job}) {
-            print "mylatex: (cached) using fmt ...\n";
+            print "mylatex: (cached) using $job.fmt ...\n";
             return _system_rc(@cmd_fmt);
         } else {
             print "mylatex: (cached) normal latex ...\n";
@@ -92,18 +98,34 @@ sub mylatex {
     open(my $lk, '>>', $lock_path) or die "Cannot open lock file $lock_path: $!";
     flock($lk, LOCK_EX);
 
+    # $STY_ROOTが指定されている場合は$PRJ_ROOTに代入して使用
+    if (defined $STY_ROOT && $STY_ROOT ne '') {
+        $STY_ROOT =~ s{^~(?=/|\\|\z)}{$ENV{HOME} // $ENV{USERPROFILE} // '~'}e;
+        $STY_ROOT = abs_path($STY_ROOT);
+        if (defined $STY_ROOT && -d $STY_ROOT) {
+            $PRJ_ROOT = $STY_ROOT;
+        } else {
+            warn "mylatex: STY_ROOT is set but could not be resolved; falling back to PRJ_ROOT\n";
+        }
+    }
+    if (!defined $PRJ_ROOT) {
+        warn "mylatex: PRJ_ROOT is undefined; disabling local sty/cls tracking\n";
+        $TRACK_STY = 0;
+    }
+
     my $sig_current = _calc_sig($main, $deps_path, $sub_path); # 現在のdepsで計算。後で更新が必要
     my $sig_saved   = _read_1line($sha_path);
 
-    # プリアンブル部の編集、あるいはdeps内ファイルの編集を検知
+    # プリアンブルの編集、あるいはdeps内ファイルの編集を検知
     $fmt_enabled{$job} = (-e $fmt_path) && (defined $sig_saved) && ($sig_saved eq $sig_current);
 
     # fmt,deps,sha1を作る
     if (!$fmt_enabled{$job}) {
         # iniモードでの実行でfmtを生成する。同時に-recorderで現段階のflsを生成する
-        print "mylatex: making fmt in ini mode...\n";
-        my $ini_src = $sub_has_preamble ? $src : $main;
-        my $rc      = _system_rc($engine, '-ini', @args, '-recorder', "-jobname=$job", "-output-directory=$auxdir", "&$engine", 'mylatexformat.ltx', $ini_src);
+        print "mylatex: making $job.fmt in ini mode...\n";
+        my $ini_src  = $sub_has_preamble ? $src : $main;
+        my @ini_args = grep { $_ ne '-recorder' && $_ !~ /^-output-directory=/ && $_ !~ /^-jobname=/ } @args; # 上書きでも問題はないが美しくはないので
+        my $rc       = _system_rc($engine, '-ini', @ini_args, '-recorder', "-jobname=$job", "-output-directory=$auxdir", "&$engine", 'mylatexformat.ltx', $ini_src);
 
         if (($rc == 0) && (-e $fmt_path)) {
             # ini実行時のflsを使ってローカルのsty等のパスをdepsに記録
@@ -115,14 +137,14 @@ sub mylatex {
             _write_1line($sha_path, $sig_current);
             $fmt_enabled{$job} = 1;
         } else {
-            warn "mylatex: fmt not found after ini; fallback to normal compile\n";
+            warn "mylatex: $job.fmt not found after ini; fallback to normal compile\n";
         }
     }
 
     close($lk);
 
     if ($fmt_enabled{$job}) {
-        print "mylatex: fmt detected & signature unchanged, so running with fmt...\n";
+        print "mylatex: $job.fmt detected & signature unchanged, so running with fmt...\n";
         return _system_rc(@cmd_fmt);
     } else {
         print "mylatex: running normal latex (no fmt)...\n";
@@ -186,8 +208,8 @@ sub _calc_sig {
     return "PREAMBLE:$pre_sig|DEPS:$deps_sig";
 }
 
-# subfilesや\inputを考慮しながらfmt対象のブリアンブル部をSHA-1化
-# @param $target cdから見たfmt対象ファイルの相対パス
+# subfilesや\inputを考慮しながらfmt対象のプリアンブルをSHA-1化
+# @param $target fmt対象ファイルのcdから見た相対パス
 sub _calc_preamble_sig {
     my ($target) = @_;
 
@@ -222,7 +244,7 @@ sub _calc_preamble_sig {
 
 # 空行やコメントは無視してfmt対象のプリアンブルを抽出する
 # @param $tex_path ソースあるいはそこでinputされた.texのパス
-# @return (プリアンブル部, その中の\inputのパス配列の参照)
+# @return (プリアンブル, その中の\inputのパス配列の参照)
 sub _extract_preamble_and_inputs {
     my ($tex_path) = @_;
     my $preamble = '';
@@ -342,8 +364,7 @@ sub _extract_local_sty_from_fls {
         my $input = $1;
         next unless $input =~ /\.(cls|sty)\z/i;
 
-        # INPUT extractbb -B artbox -O hoge.pdfのような例を弾く
-        # 空白ありの相対パスは知りません
+        # INPUT extractbb -B artbox -O hoge.pdfのような例を弾く。空白ありの相対パスは知りません
         next if $input =~ /\s/ && !file_name_is_absolute($input);
 
         if (!file_name_is_absolute($input)) {
@@ -383,7 +404,7 @@ sub _normalize_path_for_compare {
     my ($path) = @_;
     return '' unless defined $path;
 
-    # $path =~ s|/+$|| unless $path eq '/'; # 末尾の/は削除
+    # $path =~ s|/+\z|| unless $path eq '/'; # 末尾の/を削除。しかしabs_pathしていれば不要か
     $path =~ s|\\|/|g; # /で統一
     $path = lc($path) if ($^O =~ /MSWin32|cygwin|msys/i); # WIN系では小文字で統一
     return $path;
@@ -424,7 +445,7 @@ sub _system_rc {
 
 # コメント、改行コード、前後の空白を削除
 # コメント判定は非エスケープの%以降。verbatim|%|とかを削除してしまうのは御愛嬌
-sub _normalize_tex_line(\$) {
+sub _normalize_tex_line {
     defined $_[0] or return undef;
 
     _strip_eol($_[0]);
@@ -435,7 +456,7 @@ sub _normalize_tex_line(\$) {
 }
 
 # chompの代わり
-sub _strip_eol(\$) {
+sub _strip_eol {
     defined $_[0] or return undef;
     $_[0] =~ s/[\r\n]+\z//;
     return $_[0];
