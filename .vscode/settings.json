@@ -1,0 +1,43 @@
+{
+  "latex-workshop.latex.autoBuild.cleanAndRetry.enabled": false,
+  // "latex-workshop.latex.autoClean.run": "onFailed",
+  "latex-workshop.latex.build.fromFolder": ".",
+  "latex-workshop.latex.clean.args": [
+    "-r",
+    "%WORKSPACE_FOLDER%/.latexmkrc",
+    "-outdir=%WORKSPACE_FOLDER%/.aux",
+    "-c",
+    "%TEX%"
+  ],
+  "latex-workshop.latex.outDir": "%WORKSPACE_FOLDER%/out",
+
+  "latex-workshop.latex.rootFile.doNotPrompt": true,
+  "latex-workshop.latex.rootFile.useSubFile": false,
+
+  "latex-workshop.latex.recipe.default": "latexmk",
+  "latex-workshop.latex.recipes": [
+    {
+      "name": "latexmk",
+      "tools": ["latexmk"]
+    }
+  ],
+  "latex-workshop.latex.tools": [
+    {
+      "name": "latexmk",
+      "command": "latexmk",
+      // "env": {
+      //   "SOURCE_DATE_EPOCH": "946684800",
+      //   "FORCE_SOURCE_DATE": "1"
+      // },
+      "args": [
+        "-e",
+        "ensure_path('TEXINPUTS', '%WORKSPACE_FOLDER%/style//');",
+        "-e",
+        "ensure_path('BSTINPUTS', '%WORKSPACE_FOLDER%/style//');",
+        "-auxdir=%WORKSPACE_FOLDER%/.aux",
+        "-outdir=%OUTDIR%",
+        "%DOC_EXT%"
+      ]
+    }
+  ]
+}

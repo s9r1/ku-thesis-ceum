@@ -1,0 +1,471 @@
+#!/usr/bin/env perl
+use strict;
+use warnings;
+
+use Digest::SHA           qw(sha1_hex);
+use File::Basename        qw(dirname basename);
+use File::Spec::Functions qw(file_name_is_absolute catfile);
+use Fcntl                 qw(:flock);
+use Cwd                   qw(getcwd abs_path);
+
+# -- 設定
+# ローカルのsty,clsが変更された場合にfmtを再生成するかどうか
+our $TRACK_STY = 0; # 必要な場合は1にする
+
+# デフォルト（$PRJ_ROOT）から変更したい場合は入力。$STY_ROOT以下のsty,clsを監視する
+our $STY_ROOT = ""; # .texから見た相対パスでの指定も可
+# --
+
+my $tex_opts = '-synctex=1 -file-line-error -halt-on-error -interaction=nonstopmode';
+$latex    = "internal mylatex uplatex %Y %R %A $tex_opts %O %S";
+$lualatex = "lualatex $tex_opts %O %S";
+$dvipdf   = 'dvipdfmx %O -o %D %S';
+$pdf_mode = 3;
+
+$bibtex     = 'upbibtex %O %S';
+$biber      = 'biber --bblencoding=utf8 -u -U --output_safechars %O %S';
+$bibtex_use = 2;
+
+$makeindex = 'upmendex %O -o %D %S -s jpbase';
+
+$do_cd = 1;
+
+$clean_ext = "$clean_ext fmt sha1 fmtlock deps"; # mylatexで生成するファイルを追加
+
+# （開発用）
+# ソース1行目が"% $pdf_mode = 4;"などの場合にpdf_modeを切り替える
+# foreach my $arg (@ARGV) { # latexmk実行時の引数が@ARGVに入る
+#     next if $arg =~ /^-/;
+#     next unless $arg =~ /\.tex\z/i; # ソースは拡張子付き（%DOC_EXT%）で呼び出されている前提
+#     next unless -f $arg && -r _;
+
+#     open(my $fh, '<', $arg) or next;
+#     my $first = <$fh>;
+#     close($fh);
+
+#     if (defined $first && $first =~ /^\s*%\s*\$?pdf_mode\s*=\s*([0-5])\s*;?(?=\s|$)/i) {
+#         $pdf_mode = 0 + $1;
+#         last;
+#     }
+# }
+
+# do_cdされる前に実行ディレクトリを取得する。ローカルsty,clsの収集に使う
+# 必要なら $out_dir = "$PRJ_ROOT/out"; $aux_dir = "$PRJ_ROOT/.aux"; もあり
+# "latex-workshop.latex.build.fromFolder": "." も推奨
+my $PRJ_ROOT = abs_path(getcwd());
+
+my $MAX_FILES = 1000; # プリアンブル精査対象ファイル数の上限。\inputがループして無限に続く場合などを除外
+
+# 当該jobでfmtを使ってタイプセットすべきかをキャッシュしておく
+my %fmt_enabled; # job -> (undef|0|1)
+
+sub mylatex {
+    my ($engine, $auxdir, $job, $base, @args) = @_;
+
+    my $src = pop @args; # $quote_filenames=1でも""はつかない
+    $src =~ s/^"(.*)"\z/$1/; # 念のため
+    $auxdir = '.' if $auxdir eq ''; # outdir指定がない場合に対応
+    # $auxdir =~ s|[\\/]+\z||; # ini実行でoutdir指定したときの見栄えの問題。非本質
+    # $auxdir = ""; # fmt関連ファイルの生成先を固定したいとき。$ENV{HOME}/mylatex や $ENV{USERPROFILE}/mylatexのように指定
+
+    my ($main, $sub_has_preamble) = _resolve_subfiles($src);
+    my $sub_path = $sub_has_preamble ? $src : undef;
+
+    # jobnameが指定されておらず、subファイルが独自のプリアンブルを持たない場合はmain.fmtを使う
+    if ($job eq $base && $main ne $src && !$sub_has_preamble) {
+        $job = basename($main);
+        $job =~ s/\.tex\z//i;
+    }
+
+    my $fmt_path  = catfile($auxdir, "$job.fmt");
+    my $sha_path  = catfile($auxdir, "$job.sha1");
+    my $deps_path = catfile($auxdir, "$job.deps");
+    my $lock_path = catfile($auxdir, "$job.fmtlock");
+
+    my @cmd_fmt   = ($engine, '-fmt', $fmt_path, @args, $src);
+    my @cmd_plain = ($engine, @args, $src);
+
+    # 同一ビルド中の2回目以降のタイプセット
+    if (defined $fmt_enabled{$job}) {
+        if ($fmt_enabled{$job}) {
+            print "mylatex: (cached) using $job.fmt ...\n";
+            return _system_rc(@cmd_fmt);
+        } else {
+            print "mylatex: (cached) normal latex ...\n";
+            return _system_rc(@cmd_plain);
+        }
+    }
+
+    open(my $lk, '>>', $lock_path) or die "Cannot open lock file $lock_path: $!";
+    flock($lk, LOCK_EX);
+
+    # $STY_ROOTが指定されている場合は$PRJ_ROOTに代入して使用
+    if (defined $STY_ROOT && $STY_ROOT ne '') {
+        $STY_ROOT =~ s{^~(?=/|\\|\z)}{$ENV{HOME} // $ENV{USERPROFILE} // '~'}e;
+        $STY_ROOT = abs_path($STY_ROOT);
+        if (defined $STY_ROOT && -d $STY_ROOT) {
+            $PRJ_ROOT = $STY_ROOT;
+        } else {
+            warn "mylatex: STY_ROOT is set but could not be resolved; falling back to PRJ_ROOT\n";
+        }
+    }
+    if (!defined $PRJ_ROOT) {
+        warn "mylatex: PRJ_ROOT is undefined; disabling local sty/cls tracking\n";
+        $TRACK_STY = 0;
+    }
+
+    my $sig_current = _calc_sig($engine, $main, $deps_path, $sub_path); # 現在のdepsで計算。後で更新が必要
+    my $sig_saved   = _read_1line($sha_path);
+
+    # プリアンブルとdeps内ファイルの編集、エンジン等の更新を検知
+    $fmt_enabled{$job} = (-e $fmt_path) && (defined $sig_saved) && ($sig_saved eq $sig_current);
+
+    # fmt,deps,sha1を作る
+    if (!$fmt_enabled{$job}) {
+        # iniモードでの実行でfmtを生成する。同時に-recorderで現段階のflsを生成する
+        print "mylatex: making $job.fmt in ini mode...\n";
+        my $ini_src  = $sub_has_preamble ? $src : $main;
+        my @ini_args = grep { $_ ne '-recorder' && $_ !~ /^-output-directory=/ && $_ !~ /^-jobname=/ } @args; # 上書きでも問題はないが美しくはないので
+        my $rc       = _system_rc($engine, '-ini', @ini_args, '-recorder', "-jobname=$job", "-output-directory=$auxdir", "&$engine", 'mylatexformat.ltx', $ini_src);
+
+        if (($rc == 0) && (-e $fmt_path)) {
+            # ini実行時のflsを使ってローカルのsty等のパスをdepsに記録
+            my $fls_path = catfile($auxdir, "$job.fls");
+            _update_deps_from_fls($fls_path, $deps_path) if $TRACK_STY;
+
+            # ソースのプリアンブルとdepsを使ってsha1を更新
+            $sig_current = _calc_sig($engine, $main, $deps_path, $sub_path);
+            _write_1line($sha_path, $sig_current);
+            $fmt_enabled{$job} = 1;
+        } else {
+            warn "mylatex: $job.fmt not found after ini; fallback to normal compile\n";
+        }
+    }
+
+    close($lk);
+
+    if ($fmt_enabled{$job}) {
+        print "mylatex: $job.fmt detected & signature unchanged, so running with fmt...\n";
+        return _system_rc(@cmd_fmt);
+    } else {
+        print "mylatex: running normal latex (no fmt)...\n";
+        return _system_rc(@cmd_plain);
+    }
+}
+
+# subファイルについてはmainのパスを、それ以外は引数の値をそのまま返す
+# @param $main engineの実行対象となる.texのパス
+# @return (mainファイルの実在するパス, subが独自のプリアンブルを持つかどうか)
+sub _resolve_subfiles {
+    my ($main) = @_;
+    my $sub_has_preamble = 0;
+    open(my $fh, '<', $main) or return ($main, $sub_has_preamble);
+
+    my $is_subfile = 0;
+
+    while (my $line = <$fh>) {
+        _normalize_tex_line($line);
+        next if $line eq '';
+
+        if ($is_subfile) {
+            $line =~ s/(?:\\begin\{document\}|\\endofdump\b|\\csname\s+endofdump\s*\\endcsname).*\z//s; # endofdump等以降を削除
+            $sub_has_preamble = 1 if $line ne '';
+        } elsif ($line =~ /^\\documentclass\s*\[([^\]\\]+)\]\s*\{\s*subfiles\s*\}/i) {
+            my $fname = $1;
+            $fname =~ s/^\s+|\s+\z//g;
+            last if $fname eq '';
+            $fname .= ".tex" unless $fname =~ /\.tex\z/i;
+            $fname = catfile(dirname($main), $fname);
+
+            if (-e $fname) {
+                $main       = $fname;
+                $is_subfile = 1;
+                next;
+            }
+        }
+
+        last;
+    }
+
+    close($fh);
+    return ($main, $sub_has_preamble);
+}
+
+sub _calc_sig {
+    my ($engine, $target, $deps_path, $sub_path) = @_;
+
+    my $pre_sig = _calc_preamble_sig($target);
+
+    if (defined $sub_path) {
+        my $sub_sig = _calc_preamble_sig($sub_path);
+        $pre_sig = "[MAIN:$pre_sig|SUB:$sub_sig]";
+    }
+
+    my $deps_sig = $TRACK_STY ? _calc_deps_sig($deps_path) : "DEPS_IGNORED";
+    my $eng_sig  = _get_engine_sig($engine);
+
+    return "PREAMBLE:$pre_sig|DEPS:$deps_sig|ENGINE:$eng_sig";
+}
+
+# エンジンのバージョンを取得する。TeX Live更新等に対応する
+sub _get_engine_sig {
+    my ($engine) = @_;
+
+    my $engine_version = qx{$engine --version} // '';
+    $engine_version =~ s/[\r\n].*\z//s; # 2行目以降を削除
+
+    return "$engine " . $engine_version;
+}
+
+# subfilesや\inputを考慮しながらfmt対象のプリアンブルをSHA-1化
+# @param $target fmt対象ファイルのcdから見た相対パス
+sub _calc_preamble_sig {
+    my ($target) = @_;
+
+    my %seen; # 同一ファイルの複数回参照は簡略化
+    my @queue = ($target);
+    my $acc   = '';
+    my $count = 0;
+
+    # .texソースとそこで\inputされたファイルに対してループ
+    while (@queue) {
+        last if ++$count > $MAX_FILES;
+
+        my $tex_path = shift @queue;
+        my $key      = abs_path($tex_path) // $tex_path;
+        $key = _normalize_path_for_compare($key);
+
+        if ($seen{$key}++) {
+            $acc .= "<<DUP:$key>>\n";
+            next;
+        }
+
+        my ($preamble, $inputs_ref) = _extract_preamble_and_inputs($tex_path);
+
+        $acc .= "<<FILE:$key>>\n";
+        $acc .= $preamble;
+
+        push @queue, @$inputs_ref if $inputs_ref && @$inputs_ref;
+    }
+
+    return sha1_hex($acc);
+}
+
+# 空行やコメントは無視してfmt対象のプリアンブルを抽出する
+# @param $tex_path ソースあるいはそこでinputされた.texのパス
+# @return (プリアンブル, その中の\inputのパス配列の参照)
+sub _extract_preamble_and_inputs {
+    my ($tex_path) = @_;
+    my $preamble = '';
+    my @inputs;
+
+    open(my $fh, '<', $tex_path) or return ("", []);
+    my $dir = dirname($tex_path);
+
+    while (my $line = <$fh>) {
+        _normalize_tex_line($line);
+        next if $line eq '';
+
+        # \endofdump等以降を空テキストに置き換え、置き換え回数を$is_endofdumpへ
+        my $is_endofdump = $line =~ s/(?:\\begin\{document\}|\\endofdump\b|\\csname\s+endofdump\s*\\endcsname).*\z//s;
+
+        while ($line =~ /\\input(?![a-zA-Z])\s*(?:\{([^}]+)\}|([^\s]+))/g) {
+            my $m    = defined($1) ? $1 : $2;
+            my $path = _resolve_input_path($dir, $m);
+            push @inputs, $path if defined $path;
+        }
+
+        $preamble .= $line . "\n" if $line ne '';
+        last if $is_endofdump;
+    }
+
+    close($fh);
+    return ($preamble, \@inputs);
+}
+
+# ソースやそこにinputされた.texファイルに記載されたinputのパスを解決する
+# @param $dir \inputが書かれた.texのdirパス
+# @param $name \input{hoge}のhoge
+# @return hogeをパス化したもの
+sub _resolve_input_path {
+    my ($dir, $name) = @_;
+    $name =~ s/^\s+|\s+\z//g; # 前後の空白を削除
+    return undef if $name =~ /\\/; # \input{\macro}などを弾く
+
+    my $result = ($name =~ /\.\w+\z/) ? $name : "$name.tex";
+    $result = file_name_is_absolute($result) ? $result : catfile($dir, $result);
+
+    return -e $result ? $result : undef;
+}
+
+# depsに載っているファイルに対してmtime/sizeで署名を作る
+sub _calc_deps_sig {
+    my ($deps_path) = @_;
+    return "NO_DEPS" unless defined $deps_path && -e $deps_path;
+
+    open(my $fh, '<', $deps_path) or return "NO_DEPS";
+
+    my @paths;
+
+    while (my $line = <$fh>) {
+        _strip_eol($line);
+        next if $line eq '';
+        push @paths, $line;
+    }
+    close($fh);
+
+    my $acc = '';
+
+    foreach my $path (@paths) {
+        if (-e $path) {
+            my @st    = stat($path);
+            my $mtime = $st[9] // 0;
+            my $size  = $st[7] // 0;
+            $acc .= "$path\0$mtime\0$size\n";
+        } else {
+            $acc .= "$path\0MISSING\n";
+        }
+    }
+
+    return sha1_hex($acc);
+}
+
+# flsから取得したローカルのsty,clsをdepsに書き込む
+sub _update_deps_from_fls {
+    my ($fls_path, $deps_path) = @_;
+
+    if (!-e $fls_path) {
+        warn "mylatex: no .fls found ($fls_path). deps list not updated.\n";
+        return;
+    }
+
+    my $deps = _extract_local_sty_from_fls($fls_path, $PRJ_ROOT);
+
+    open(my $fh, '>', $deps_path) or die "Cannot write $deps_path: $!";
+    print $fh "$_\n" for @$deps;
+    close($fh);
+
+    print "mylatex: deps updated: " . scalar(@$deps) . " files\n";
+}
+
+# ini実行時のflsのINPUTを精査し、$PRJ_ROOT以下で読み込まれているsty,cls配列の参照を返す
+# @param $fls flsの相対/絶対パス
+# @param $root ルートの絶対パス
+sub _extract_local_sty_from_fls {
+    my ($fls, $root) = @_;
+
+    my $pwd; # INPUTが相対パスの場合に備えている。しかし、styやclsでそうなる場合があるかは不明
+    my %seen;
+    my @out;
+
+    open(my $fh, '<', $fls) or return [];
+
+    while (my $line = <$fh>) {
+        _strip_eol($line);
+
+        if ($line =~ /^PWD\s+(.+)\s*\z/) {
+            $pwd = $1;
+            next;
+        }
+
+        next unless $line =~ /^INPUT\s+(.+)\s*\z/;
+        my $input = $1;
+        next unless $input =~ /\.(cls|sty)\z/i;
+
+        # INPUT extractbb -B artbox -O hoge.pdfのような例を弾く。空白ありの相対パスは知りません
+        next if $input =~ /\s/ && !file_name_is_absolute($input);
+
+        if (!file_name_is_absolute($input)) {
+            next unless defined $pwd;
+            $input = catfile($pwd, $input);
+        }
+
+        my $abs_input = abs_path($input) // next;
+        next unless _is_path_under_root($abs_input, $root);
+
+        my $key = _normalize_path_for_compare($abs_input);
+        next if $seen{$key}++;
+        push @out, $abs_input;
+    }
+    close($fh);
+
+    @out = sort @out; # deps署名の安定性のため
+    return \@out;
+}
+
+# targetファイルがrootディレクトリに含まれるかどうか
+# @param $abs_target abs_path済みのファイルパス
+# @param $abs_root abs_path済みのディレクトリパス
+sub _is_path_under_root {
+    my ($abs_target, $abs_root) = @_;
+    return 0 unless defined $abs_target && defined $abs_root;
+
+    $abs_target = _normalize_path_for_compare($abs_target);
+    $abs_root   = _normalize_path_for_compare($abs_root);
+
+    $abs_root .= '/' unless $abs_root =~ /\/\z/; # /a/b -> /a/b/
+    return index($abs_target, $abs_root) == 0 ? 1 : 0;
+}
+
+# @param $path abs_path済みのパス
+sub _normalize_path_for_compare {
+    my ($path) = @_;
+    return '' unless defined $path;
+
+    # $path =~ s|/+\z|| unless $path eq '/'; # 末尾の/を削除。しかしabs_pathしていれば不要か
+    $path =~ s|\\|/|g; # /で統一
+    $path = lc($path) if ($^O =~ /MSWin32|cygwin|msys/i); # WIN系では小文字で統一
+    return $path;
+}
+
+# ファイルの一行目を読み込んで返す
+sub _read_1line {
+    my ($path) = @_;
+    open(my $fh, '<', $path) or return undef;
+    my $line = <$fh>;
+    close($fh);
+    return undef unless defined $line;
+    $line =~ s/[\r\n]+\z//;
+    return $line;
+}
+
+# ファイルを上書きする
+sub _write_1line {
+    my ($path, $value) = @_;
+    open(my $fh, '>', $path) or die "Cannot write $path: $!";
+    print $fh "$value\n";
+    close($fh);
+}
+
+# Run_substの代わり。配列で実行することで""周辺の処理を避ける
+sub _system_rc {
+    my (@cmd) = @_;
+
+    print "------------\n";
+    print "Running: '" . join(' ', @cmd) . "'\n";
+    print "------------\n";
+
+    my $st = system(@cmd);
+    return 1 if $st == -1; # 起動失敗
+    return 1 if $st & 127; # 異常終了
+    return $st >> 8; # exit code
+}
+
+# コメント、改行コード、前後の空白を削除
+# コメント判定は非エスケープの%以降。verbatim|%|とかを削除してしまうのは御愛嬌
+sub _normalize_tex_line {
+    defined $_[0] or return undef;
+
+    _strip_eol($_[0]);
+    $_[0] =~ s/(?<!\\)(?:\\\\)*\K%.*\z//; # コメントを削除
+    $_[0] =~ s/^\s+|\s+\z//g; # 前後の空白を削除
+
+    return $_[0];
+}
+
+# chompの代わり
+sub _strip_eol {
+    defined $_[0] or return undef;
+    $_[0] =~ s/[\r\n]+\z//;
+    return $_[0];
+}
