@@ -21,10 +21,15 @@
 
 \clist_new:N \g__kuth_pass_clist
 
+\bool_new:N \g__kuth_bibsec_bool
+
 \keys_define:nn { ku-thesis-ceum / option }{
   doctor   .code:n = \__kuth_set_degree:n { doctor },
   master   .code:n = \__kuth_set_degree:n { master },
   bachelor .code:n = \__kuth_set_degree:n { bachelor },
+
+  bibsec .bool_gset:N = \g__kuth_bibsec_bool,
+  bibsec .default:n = true,
 
   unknown .code:n = {
     \clist_gput_right:No \g__kuth_pass_clist { \CurrentOption }
@@ -68,7 +73,7 @@
 ]{jlreq}
 
 \RequirePackage{graphicx}
-
+\RequirePackage[superscript]{cite}
 \RequirePackage[hidelinks]{hyperref}
 \sys_if_engine_uptex:T{
   \RequirePackage{pxjahyper}
@@ -155,12 +160,27 @@
 % ------------------------------------------------------------
 \RequirePackage{jlreq-complements}
 
-\jlreqsetup{
-  thebibliography_heading={
-    \chapter*{\refname}
-    \addcontentsline{toc}{chapter}{\protect\numberline{}\refname}
+\bool_if:NTF \g__kuth_bibsec_bool
+{
+  \jlreqsetup{
+    thebibliography_heading={
+      \section*{\refname}
+    }
   }
 }
+{
+  \jlreqsetup{
+    thebibliography_heading={
+      \chapter*{\refname}
+      \addcontentsline{toc}{chapter}{\protect\numberline{}\refname}
+    }
+  }
+}
+
+\renewcommand{\@citess}[1]{
+  \kern0pt\textsuperscript{#1\symbol{41}}% \kern0ptは1)前の和文とのアキ追加を防止
+}
+\renewcommand{\@biblabel}[1]{#1\symbol{41}}
 
 % ------------------------------------------------------------
 % Appendix
