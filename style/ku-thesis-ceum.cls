@@ -1,32 +1,28 @@
-\RequirePackage{l3keys2e}
-
-\NeedsTeXFormat{LaTeX2e}
-\ProvidesExplClass{ku-thesis-ceum}{2026-01-09}{0.1.0}
+\NeedsTeXFormat{LaTeX2e}[2022-06-01]
+\ProvidesExplClass{ku-thesis-ceum}{2026-11-03}{0.2.0}
 {Thesis class for CE and UM}
 
-\sys_if_engine_luatex:F{
-  \sys_if_engine_uptex:TF{
+\sys_if_engine_luatex:F {
+  \sys_if_engine_uptex:TF {
     \RequirePackage{plautopatch}
-  }{
-    \msg_new:nnn { myclass } { bad-engine }
+  } {
+    \msg_new:nnn { ku-thesis-ceum } { bad-engine }
     { LuaLaTeX~or~upLaTeX~required. }
-    \msg_fatal:nn { myclass } { bad-engine }
+    \msg_fatal:nn { ku-thesis-ceum } { bad-engine }
   }
 }
 
 \str_new:N \g_kuth_degree_str
-\cs_new_protected:Npn \__kuth_set_degree:n #1{
-  \str_gset:Nn \g_kuth_degree_str {#1}
-}
+\str_gset:Nn \g_kuth_degree_str { master }% 未指定対策
 
 \clist_new:N \g__kuth_pass_clist
 
 \bool_new:N \g__kuth_bibsec_bool
 
-\keys_define:nn { ku-thesis-ceum / option }{
-  doctor   .code:n = \__kuth_set_degree:n { doctor },
-  master   .code:n = \__kuth_set_degree:n { master },
-  bachelor .code:n = \__kuth_set_degree:n { bachelor },
+\keys_define:nn { ku-thesis-ceum / option } {
+  doctor   .code:n = \str_gset:Nn \g_kuth_degree_str { doctor },
+  master   .code:n = \str_gset:Nn \g_kuth_degree_str { master },
+  bachelor .code:n = \str_gset:Nn \g_kuth_degree_str { bachelor },
 
   bibsec .bool_gset:N = \g__kuth_bibsec_bool,
   bibsec .default:n = true,
@@ -36,85 +32,53 @@
   }
 }
 
-\ProcessKeysOptions { ku-thesis-ceum / option }
-\PassOptionsToClass { \g__kuth_pass_clist } { jlreq }
+\ProcessKeyOptions[ku-thesis-ceum/option]
+\PassOptionsToClass{\g__kuth_pass_clist}{jlreq}
 
-\str_if_empty:NT \g_kuth_degree_str{
-  \str_gset:Nn \g_kuth_degree_str { master }
-}
-
-\str_case:Vn \g_kuth_degree_str{
-  {doctor}{
-    \cs_gset:cpn { @thesistype }  { 博士論文 }
-    \cs_gset:cpn { @ethesistype } { Doctoral~Thesis }
-  }
-  {master}{
-    \cs_gset:cpn { @thesistype }  { 修士論文 }
-    \cs_gset:cpn { @ethesistype } { Master's~Thesis }
-  }
-  {bachelor}{
-    \cs_gset:cpn { @thesistype }  { 学士論文 }
-    \cs_gset:cpn { @ethesistype } { Bachelor's~Thesis }
-  }
-}
-
-% jlreq初期化の際にcmrでサイズ代替が起こらないようにする
+% jlreq初期化の際にcmrでのサイズ代替を防止
 \RequirePackage{fix-cm}
+
+\str_if_eq:VnTF \g_kuth_degree_str { bachelor } {
+  \PassOptionsToClass{
+    jafontsize=12pt,line_length=36zw,number_of_lines=31
+  }{jlreq}
+} {
+  \PassOptionsToClass{
+    jafontsize=11pt,line_length=40zw,number_of_lines=35
+  }{jlreq}
+}
 
 \LoadClass[
   book,
   openany,
   paper=a4paper,
-  jafontsize=11pt,
   jafontscale=0.92,
-  line_length=40zw,
-  number_of_lines=35,
-  headfoot_verticalposition=15mm,
+  baselineskip=1.8zw% デフォルトは1.7zw
 ]{jlreq}
 
 \RequirePackage{graphicx}
 \RequirePackage[superscript]{cite}
 \RequirePackage[hidelinks]{hyperref}
-\sys_if_engine_uptex:T{
+\sys_if_engine_uptex:T {
   \RequirePackage{pxjahyper}
 }
 
 % ------------------------------------------------------------
 % Fonts
 % ------------------------------------------------------------
-% \sys_if_engine_uptex:T{
-%   \RequirePackage[T1]{fontenc}
-%   \RequirePackage{jlreq-deluxe}
+% 和文フォントはjlreq標準を採用
 
-%   \RequirePackage[haranoaji]{pxchfon}
-%   \setboldgothicfont{HaranoAjiGothic-Medium.otf}
-
-%   % \bfseriesしたときに和文フォントではbではなくbxを使う
-%   \DeclareFontShape{JY2}{hmc}{b}{n}{<->ssub*hmc/bx/n}{}
-%   \DeclareFontShape{JT2}{hmc}{b}{n}{<->ssub*hmc/bx/n}{}
-%   \DeclareFontShape{JY2}{hgt}{b}{n}{<->ssub*hgt/bx/n}{}
-%   \DeclareFontShape{JT2}{hgt}{b}{n}{<->ssub*hgt/bx/n}{}
-% }
-% \sys_if_engine_luatex:T{
-%   \RequirePackage[haranoaji,deluxe]{luatexja-preset}
-%   \ltjnewpreset{ku-thesis-ceum}{haranoaji,gt-b=HaranoAjiGothic-Medium.otf}
-%   \ltjapplypreset{ku-thesis-ceum}
-% }
-
-\RequirePackage[scale=1.05,semibold]{sourcesanspro}
-
-% 暫定
-% https://github.com/anlp-nenji/nlproceedings/blob/main/nlproceedings.cls
+\RequirePackage[scale=1.05,semibold]{sourcesans}
 \RequirePackage[defaultsups]{newtxtext}
-\RequirePackage[bigdelims,vvarbb,amsthm]{newtxmath}
-\RequirePackage[cal=boondoxo]{mathalfa}
+\RequirePackage[vvarbb,amsthm]{newtxmath}
+\RequirePackage[cal=boondoxo]{mathalpha}
 
-\newcommand{\headfont}{\sffamily\gtfamily\bfseries}
+\newcommand{\headfont}{\sffamily\bfseries}
 
 % ------------------------------------------------------------
 % Headings
 % ------------------------------------------------------------
-% frontmatterが奇数ページの場合にmainmatterの前に空ページを足されないように
+% frontmatterが奇数ページの場合にmainmatter前に空ページが挿入されるのを防止
 \jlreqsetup{mainmatter_pagebreak=clearpage}
 
 \ModifyHeading{chapter}{
@@ -142,7 +106,7 @@
 }
 
 % ------------------------------------------------------------
-% Abstruct, Acknowledgment
+% Abstract, Acknowledgment
 % ------------------------------------------------------------
 \NewDocumentCommand{\Yoshi}{O{論文要旨}}{
   \clearpage
@@ -158,19 +122,11 @@
 % ------------------------------------------------------------
 % Bibliography
 % ------------------------------------------------------------
-\RequirePackage{jlreq-complements}
-
-\bool_if:NTF \g__kuth_bibsec_bool
-{
-  \jlreqsetup{
-    thebibliography_heading={
+\jlreqsetup{
+  thebibliography_heading={
+    \bool_if:NTF \g__kuth_bibsec_bool {
       \section*{\refname}
-    }
-  }
-}
-{
-  \jlreqsetup{
-    thebibliography_heading={
+    } {
       \chapter*{\refname}
       \addcontentsline{toc}{chapter}{\protect\numberline{}\refname}
     }
@@ -178,20 +134,20 @@
 }
 
 \renewcommand{\@citess}[1]{
-  \kern0pt\textsuperscript{#1\symbol{41}}% \kern0ptは1)前の和文とのアキ追加を防止
+  % \kern0ptで1)前の和文とのアキ追加を防止
+  % )ではなく\symbol{41}なのはtex-fmtの都合
+  \kern0pt\textsuperscript{#1\symbol{41}}
 }
 \renewcommand{\@biblabel}[1]{#1\symbol{41}}
 
 % ------------------------------------------------------------
 % Appendix
 % ------------------------------------------------------------
-% Appendixのページ番号をA-1形式にする
 \jlreqsetup{
   appendix_postcode={
-    % Hookするタイミングは\appendix後の\chapterの後でないといけない
+    % Hookのタイミングは\appendix後の\chapterの後
     % しかしcmd/chapter/afterはHookできないので代わりがここ
     \AddToHookNext{cmd/jlreq@heading@maketoc@chapter/before}{
-      \setcounter{page}{1}
       \renewcommand{\thepage}{\thechapter-\arabic{page}}
     }
     \AddToHook{cmd/jlreq@heading@maketoc@chapter/before}{
@@ -210,7 +166,6 @@
 \setlength{\cftaftertoctitleskip}{1\baselineskip}
 \pretocmd{\@cfttocstart}{\clearpage}{}{}
 
-% chapter関連
 \renewcommand{\cftchapfont}{\headfont}
 \renewcommand{\cftchappagefont}{\headfont}
 \setlength{\cftchapnumwidth}{4\zw}
@@ -219,59 +174,81 @@
 % Front Cover
 % ------------------------------------------------------------
 \newcommand\edate[1]{\newcommand\@edate{#1}}
-\newcommand\department[1]{\newcommand\@department{#1}}
-\newcommand\edepartment[1]{\newcommand\@edepartment{#1}}
 \newcommand\affiliation[1]{\newcommand\@affiliation{#1}}
 
 \renewcommand{\maketitle}{
+  \str_if_eq:VnTF \g_kuth_degree_str { master } {
+    \__kuth_master_cover:
+  } {
+    \__kuth_common_cover:
+  }
+}
+
+\cs_new_protected:Npn \__kuth_common_cover: {
   \begin{titlepage}
+    \centering
+    \renewcommand{\jlreqkanjiskip}{0.12\zw}
+    \vspace*{3.5cm}
+    \fontsize{20pt}{36pt}\selectfont
+    \@title\par
+    \vfill
+    {
+      \fontsize{18pt}{36pt}\selectfont
+      \@date\par
+      \str_if_eq:VnT \g_kuth_degree_str { bachelor } {
+        京都大学工学部地球工学科土木工学コース\par
+        \vspace{6mm}
+      }
+    }
+    \vspace{2mm}
+    \@author\par
+    \vspace{3.5cm}
+  \end{titlepage}
+}
+
+\cs_new_protected:Npn \__kuth_master_cover: {
+  \begin{titlepage}
+    \vspace*{1mm}
     \noindent
     \begin{minipage}[t]{0.7\textwidth}
+      \vspace{0pt}
       {
         \headfont
-        \renewcommand{\jlreqkanjiskip}{0.04\zw}
-        \normalsize% kanjiskip適用のため必要
-        京都大学大学院工学研究科\\
-        \ifdefvoid{\@department}{}{\@department\@thesistype\\}
+        \renewcommand{\jlreqkanjiskip}{0.05\zw}
+        \jafontsize{12pt}{18pt}\selectfont
+        京都大学大学院工学研究科\par
+        都市社会工学専攻修士論文\par
         \@date\par
       }
-      \linespread{0.85}\selectfont
-      \vspace{1em}
-      \@ethesistype\\
-      \ifdefvoid{\@edepartment}{}{\@edepartment\\}
-      Graduate~School~of~Engineering\\
+      \vspace{6mm}
+      \fontsize{12pt}{15pt}\selectfont
+      Master's~Thesis\par
+      Department~of~Urban~Management\par
+      Graduate~School~of~Engineering\par
       Kyoto~University
-      \ifdefvoid{\@edate}{}{\\\@edate}
+      \ifdefvoid{\@edate}{}{\par\@edate}
     \end{minipage}
     \hfill
     \begin{minipage}[t]{0.25\textwidth}
       \vspace{0pt}
       \raggedleft
-      \includegraphics[width=25mm,pagebox=artbox]{E-B.pdf}
-      \hspace*{1.5em}
+      \includegraphics[width=2.5cm,pagebox=artbox]{E-B.pdf}
+      \hspace*{5mm}
     \end{minipage}
 
-    \vspace{1.2em}
+    \vspace{4.5mm}
     \hrule height0.75pt
     \vspace{2.5cm}
 
-    {
-      \renewcommand{\jlreqkanjiskip}{0.12\zw}
-      \renewcommand{\jlreqxkanjiskip}{0.08\zw}
-      \begin{center}
-        \fontsize{18pt}{36pt}\selectfont
-        \@title
-      \end{center}
-
-      \vspace{3.5cm}
-      \begin{center}
-        \fontsize{16pt}{36pt}\selectfont
-        京都大学大学院\hspace{1\zw}工学研究科
-        \ifdefvoid{\@department}{}{\hspace{1\zw}\@department}
-        \ifdefvoid{\@affiliation}{}{\\\@affiliation}
-        \par\@author
-      \end{center}
-    }
+    \centering
+    \renewcommand{\jlreqkanjiskip}{0.12\zw}
+    \fontsize{18pt}{36pt}\selectfont
+    \@title\par
+    \vspace{3.5cm}
+    \fontsize{16pt}{36pt}\selectfont
+    京都大学大学院\hspace{1\zw}工学研究科\hspace{1\zw}都市社会工学専攻
+    \ifdefvoid{\@affiliation}{}{\par\@affiliation}
+    \par\@author\par
   \end{titlepage}
 }
 
