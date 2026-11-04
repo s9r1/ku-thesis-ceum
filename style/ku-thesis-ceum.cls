@@ -122,6 +122,10 @@
 % ------------------------------------------------------------
 % Bibliography
 % ------------------------------------------------------------
+\bool_if:NT \g__kuth_bibsec_bool {
+  \RequirePackage{chapterbib}
+}
+
 \jlreqsetup{
   thebibliography_heading={
     \bool_if:NTF \g__kuth_bibsec_bool {
