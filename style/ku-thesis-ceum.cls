@@ -106,6 +106,13 @@
 }
 
 % ------------------------------------------------------------
+% Figures and Tables
+% ------------------------------------------------------------
+\AddToHook{env/table/begin}{
+  \setlength{\belowcaptionskip}{\abovecaptionskip}
+}
+
+% ------------------------------------------------------------
 % Abstract, Acknowledgment
 % ------------------------------------------------------------
 \NewDocumentCommand{\Yoshi}{O{論文要旨}}{
@@ -173,6 +180,8 @@
 \renewcommand{\cftchapfont}{\headfont}
 \renewcommand{\cftchappagefont}{\headfont}
 \setlength{\cftchapnumwidth}{4\zw}
+
+\setcounter{tocdepth}{2}
 
 % ------------------------------------------------------------
 % Front Cover
