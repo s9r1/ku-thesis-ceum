@@ -72,14 +72,21 @@
 \RequirePackage[defaultsups]{newtxtext}
 \RequirePackage[vvarbb,amsthm]{newtxmath}
 \RequirePackage[cal=boondoxo]{mathalpha}
+\RequirePackage[scale=0.9,semibold]{sourcecodepro}
 
 \newcommand{\headfont}{\sffamily\bfseries}
 
 % ------------------------------------------------------------
 % Headings
 % ------------------------------------------------------------
-% frontmatterが奇数ページの場合にmainmatter前に空ページが挿入されるのを防止
+% frontmatterが奇数ページで終わる場合にmainmatter前に空ページが挿入されるのを防止
 \jlreqsetup{mainmatter_pagebreak=clearpage}
+
+\clist_map_inline:nn { chapter, section, subsection, subsubsection } {
+  \ModifyHeading{#1}{
+    second_heading_text_indent=0pt
+  }
+}
 
 \ModifyHeading{chapter}{
   font=\headfont\LARGE,
@@ -106,14 +113,41 @@
 }
 
 % ------------------------------------------------------------
-% Figures and Tables
+% Figures, Tables
 % ------------------------------------------------------------
 \AddToHook{env/table/begin}{
   \setlength{\belowcaptionskip}{\abovecaptionskip}
 }
 
 % ------------------------------------------------------------
-% Abstract, Acknowledgment
+% Source Code
+% ------------------------------------------------------------
+\RequirePackage{xcolor,listings}
+\lstset{
+  basicstyle=\small\ttfamily,
+  commentstyle=\itshape\color{black!65},
+  numbers=left,
+  numberstyle=\scriptsize\ttfamily\color{black!55},
+  xleftmargin=2.75em,
+  framexleftmargin=2.75em,
+  columns=fullflexible,
+  keepspaces=true,
+  showstringspaces=false,
+  upquote=true,
+  breaklines=true,
+  postbreak=\mbox{\ensuremath{\hookrightarrow}\kern0.5em},
+  tabsize=4,
+  frame=tb,
+  framesep=0.5\zw,
+  rulecolor=\color{black!60},
+  aboveskip=0.5\baselineskip,
+  belowskip=0.5\baselineskip
+}
+\renewcommand{\lstlistingname}{コード}
+\renewcommand{\lstlistlistingname}{コード一覧}
+
+% ------------------------------------------------------------
+% Abstract, Acknowledgments
 % ------------------------------------------------------------
 \NewDocumentCommand{\Yoshi}{O{論文要旨}}{
   \clearpage
@@ -266,7 +300,7 @@
 }
 
 % ------------------------------------------------------------
-% Convenience Commands / Environments
+% Helper Commands, Environments
 % ------------------------------------------------------------
 \newcommand{\figref}[1]{\figurename\ref{#1}}
 \newcommand{\tabref}[1]{\tablename\ref{#1}}
